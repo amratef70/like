@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: cloud-sync-service  # غير الاسم هنا أيضاً
+    name: cloud-sync-service  # يمكنك تغيير الاسم
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 4 -b 0.0.0.0:10000 app:app
+    startCommand: gunicorn -w 4 -b 0.0.0.0:$PORT app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -11,4 +11,3 @@ services:
         value: "8554468568:AAFvQJVSo6TtBao6xreo_Zf1DxnFupKVTrc"
       - key: TELEGRAM_CHAT_ID
         value: "1367401179"
-
